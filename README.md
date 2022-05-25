@@ -5,7 +5,7 @@ This is the repository of the Telegram sticker bot that is used for the [Froggin
 The following files and their content are required for the bot to function.
 
 ## Configuration File
-Configure the content of the `.env` file in the project root next to `bot.js`.
+Create a `.env` file in the project root next to `bot.js` and configure the parameters.
 
 Example content of `.env` file:
 ```
@@ -35,6 +35,10 @@ other/frog2b.png|🤖
 other/frogBeerCan.png|🍻🍺
 other/frogBeer.png|🍻🍺
 ```
+
+# Running the bot
+Running the bot requires the following command:
+`node bot.js`
 
 # License
 This project is licensed under the MIT license, which can be found in the `LICENSE` file.
