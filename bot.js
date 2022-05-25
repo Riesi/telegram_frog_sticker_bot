@@ -25,6 +25,11 @@ const hash = s => require('crypto').createHash('sha256').update(s).digest('base6
             cwd: join(process.env.REPO, "git_repo")
         });
     }
+    
+    console.log("Checking out branch");
+        let res = execSync(`git checkout ${process.env.GITBRANCH}`, {
+            cwd: join(process.env.REPO, "git_repo")
+        });
 
     if (!await exists(join(process.env.REPO, "stickerset_meta.json"))) {
         console.log("There doesn't seem to be a sticker set created yet...");
@@ -101,7 +106,22 @@ const hash = s => require('crypto').createHash('sha256').update(s).digest('base6
     console.log("Loading definitions");
 
     let defs = await fs.readFile(join(process.env.REPO, "git_repo", "telegram_definitions.txt"), "utf-8");
-    defs = defs.split("\n").filter(a => a.length > 2).map(a => a.split("|")).map(([file, emojis]) => ({file, emojis}));
+
+    let defLines = defs.split("\n").filter(a => a.length > 2);
+    defs = defLines.map(a => a.split("|")).filter(a => a.length > 1).map(([file, emojis]) => ({file, emojis}));
+    
+    let defs_nomapping = defLines.map(a => a.split("|")).filter(a => a.length == 1).map(([file]) => {
+        codes = file.split('-').slice(0,-1).map(a => a.replace('U',''));
+        if(codes.length > 1){ // emojis with multiple codepoints
+            hexCodes = codes.map(a => '0x'.concat(a));
+            emojis = String.fromCodePoint(...hexCodes);
+        }else{
+            hexCodes = '0x'.concat(codes[0]);   
+            emojis = String.fromCodePoint(hexCodes);
+        }
+        return ({file, emojis})
+    });
+    defs = defs_nomapping.concat(defs);
 
     let state = JSON.parse(await fs.readFile(join(process.env.REPO, "stickerset_state.json"), "utf-8"));
 
@@ -111,7 +131,7 @@ const hash = s => require('crypto').createHash('sha256').update(s).digest('base6
     console.log("Hashing files");
 
     for (let {file, emojis} of defs) {
-        candidates[hash(await fs.readFile(join(process.env.REPO, "git_repo", "png", "fixed_height", "512", file)))] = {
+        candidates[hash(await fs.readFile(join(process.env.REPO, "git_repo", "png", "512", file)))] = {
             file, emojis
         };
     }
@@ -136,7 +156,7 @@ const hash = s => require('crypto').createHash('sha256').update(s).digest('base6
         let sticker;
         try {
             sticker = await apiClient.uploadStickerFile(process.env.OWNER, {
-                source: await fs.readFile(join(process.env.REPO, "git_repo", "png", "fixed_height", "512", candidates[candidate].file))
+                source: await fs.readFile(join(process.env.REPO, "git_repo", "png", "512", candidates[candidate].file))
             });
             let stickers_pre = (await apiClient.getStickerSet(setName)).stickers.map(a=>a.file_unique_id);
             await apiClient.addStickerToSet(process.env.OWNER, setName, {
@@ -146,21 +166,7 @@ const hash = s => require('crypto').createHash('sha256').update(s).digest('base6
             let stickers_post = (await apiClient.getStickerSet(setName)).stickers.map(a=>a.file_unique_id);
             sticker = stickers_post.filter(a=>!stickers_pre.includes(a));
         } catch(e) {
-            console.log("Failed to upload fixed height, trying fixed width");
-            try {
-                sticker = await apiClient.uploadStickerFile(process.env.OWNER, {
-                    source: await fs.readFile(join(process.env.REPO, "git_repo", "png", "fixed_width", "512", candidates[candidate].file))
-                });
-                let stickers_pre = (await apiClient.getStickerSet(setName)).stickers.map(a=>a.file_unique_id);
-                await apiClient.addStickerToSet(process.env.OWNER, setName, {
-                    png_sticker: sticker.file_id,
-                    emojis: candidates[candidate].emojis
-                });
-                let stickers_post = (await apiClient.getStickerSet(setName)).stickers.map(a=>a.file_unique_id);
-                sticker = stickers_post.filter(a=>!stickers_pre.includes(a));
-            } catch(e) {
-                console.log("Failed both, bailing out, shit's fucked");
-            }
+            console.log("Failed to upload, bailing out, shit's fucked: " + candidates[candidate].file);
         }
 
         state[candidate] = {
