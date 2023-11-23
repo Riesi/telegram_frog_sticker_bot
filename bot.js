@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const { F_OK } = require('fs').constants;
 const { access } = require('fs');
 const { join } = require('path');
+const path = require('path');
 const { execSync } = require('child_process');
 const {Telegram} = require("telegraf");
 const inquirer = require('inquirer');
@@ -22,17 +23,35 @@ const hash = s => require('crypto').createHash('sha256').update(s).digest('base6
     let apiClient = new Telegram(process.env.TG_TOKEN);
 
     console.log("Loading pack locations");
-
     let packs_dir = join(process.env.REPO, "git_repo", "telegram_packs");
-
-    console.log(packs_dir);
     let packs = await fs.readdir(packs_dir);
+
+    //get root pack from base svg folder
+    let root_svg_dir = join(process.env.REPO, "git_repo", "svg");
+    let root_svgs = "";
+    let root_svgs_dir_content = await fs.readdir(root_svg_dir);
+    for (file of root_svgs_dir_content) {
+        let fileDetails = await fs.stat(path.resolve(root_svg_dir, file));
+        if (fileDetails.isFile()) {
+            file = file.replace(".svg","");
+            root_svgs = root_svgs+file+'\n';
+        }
+    };
+    let root_defs = await load_pack_definitions(root_svgs);
+    await handle_stickers(apiClient, "main", setName, `${setTitle} Stickers!`, root_defs);
 
     // do the sticker pack magic for each defintion file^
     for (const pack of packs) {
         console.log(pack);
         let name = pack.replace(".txt","");
-        await handle_stickers(apiClient, name, setName.concat(name), setTitle.concat(name), join(packs_dir, pack));
+
+        let defs_file = await fs.readFile(join(packs_dir, pack), "utf-8");
+        let defs = await load_pack_definitions(defs_file);
+        if (defs == null){
+            continue;
+        }
+        let name_upper = name.charAt(0).toUpperCase() + name.slice(1);
+        await handle_stickers(apiClient, name, setName, `${setTitle} ${name_upper}!`, defs);
     };
 
 })();
@@ -60,7 +79,34 @@ async function git(){
     });
 }
 
-async function handle_stickers(apiClient, plainName, setName, setTitle, packDefinition){
+async function load_pack_definitions(defs){
+    console.log("Loading definitions");
+
+    let defLines = defs.split("\n").filter(a => a.length > 2);
+    defs = defLines.map(a => a.split("|")).filter(a => a.length > 1).map(([file, emojis]) => ({file, emojis}));
+
+    let defs_nomapping = defLines.map(a => a.split("|")).filter(a => a.length == 1).map(([file]) => {
+        codes = file.split('-').slice(0,-1).map(a => a.replace('U',''));
+        if(codes.length > 1){ // emojis with multiple codepoints
+            hexCodes = codes.map(a => '0x'.concat(a));
+            emojis = String.fromCodePoint(...hexCodes);
+        }else{
+            hexCodes = '0x'.concat(codes[0]);   
+            emojis = String.fromCodePoint(hexCodes);
+        }
+        return ({file, emojis})
+    });
+    defs = defs_nomapping.concat(defs);
+
+    if(defs.length>=120){
+        console.log("Emoji List too long!\nSplitting each 120 is required! Length: "+defs.length);
+        return null;
+    }
+
+    return defs;
+}
+
+async function handle_stickers(apiClient, nameSpecifier, setName, setTitle, packDefinitions){
     let me = await apiClient.getMe();
 
 
@@ -68,9 +114,9 @@ async function handle_stickers(apiClient, plainName, setName, setTitle, packDefi
 
     console.log("Resolving set");
 
-    setName = `${setName}_by_${me.username}`;
+    setName = `${setName}_${nameSpecifier}_by_${me.username}`;
 
-    stateFile = join(process.env.REPO, `stickerset_state_${plainName}.json`);
+    stateFile = join(process.env.REPO, `stickerset_state_${nameSpecifier}.json`);
 
     if (!await exists(stateFile)) {
         console.log("No state file found, note that all stickers in the set will be purged after a successful sync. Are you sure you want to continue?");
@@ -87,38 +133,13 @@ async function handle_stickers(apiClient, plainName, setName, setTitle, packDefi
         await fs.writeFile(stateFile, "{}");
     }
 
-    console.log("Loading definitions");
-    console.log(packDefinition);
-    let defs = await fs.readFile(packDefinition, "utf-8");
-
-    let defLines = defs.split("\n").filter(a => a.length > 2);
-    defs = defLines.map(a => a.split("|")).filter(a => a.length > 1).map(([file, emojis]) => ({file, emojis}));
-    
-    let defs_nomapping = defLines.map(a => a.split("|")).filter(a => a.length == 1).map(([file]) => {
-        codes = file.split('-').slice(0,-1).map(a => a.replace('U',''));
-        if(codes.length > 1){ // emojis with multiple codepoints
-            hexCodes = codes.map(a => '0x'.concat(a));
-            emojis = String.fromCodePoint(...hexCodes);
-        }else{
-            hexCodes = '0x'.concat(codes[0]);   
-            emojis = String.fromCodePoint(hexCodes);
-        }
-        return ({file, emojis})
-    });
-    defs = defs_nomapping.concat(defs);
-
-    if(defs.length>=120){
-        console.log("Emoji List too long!\nSplitting each 120 is required! Length: "+defs.length);
-        return -1;
-    }
-
 
     let candidates = {}; //hashmap of all emojis
     let knownStickers = [];
     let has = [];
     console.log("Hashing files");
 
-    for (let {file, emojis} of defs) {
+    for (let {file, emojis} of packDefinitions) {
         candidates[hash(await fs.readFile(join(process.env.REPO, "git_repo", "png", "512", file+".png")))] = {
             file, emojis
         };
